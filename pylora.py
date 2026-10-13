@@ -1,23 +1,21 @@
+"""A simple implementation of LoRA (Low-Rank Adaptation) in PyTorch."""
+
+from abc import abstractmethod
+from itertools import repeat
+from typing import List, Optional, Tuple
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import copy
 
-import math
-from typing import Optional, List, Iterator
-from collections import OrderedDict
-from itertools import repeat
-from abc import abstractmethod
+class LoRALayer:
+    """Shared state for LoRA layers: rank, scaling, dropout and merge flags."""
 
-from typing import Tuple
-
-
-class LoRALayer():
     def __init__(
-        self, 
-        rank: int, 
-        lora_alpha: int, 
+        self,
+        rank: int,
+        lora_alpha: int,
         lora_dropout: float,
         merge_weights: bool,
     ):
@@ -27,7 +25,7 @@ class LoRALayer():
         self.merge_weights = merge_weights
         self.scaling = self.lora_alpha / self.rank
         self.lora_dropout_func = nn.Dropout(lora_dropout) if lora_dropout > 0 else nn.Identity()
-    
+
     @abstractmethod
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         ...
@@ -37,8 +35,14 @@ class LoRALayer():
         ...
 
 
-#maybe replace nn.Linear with FrozenLinear for consistent implementations?
+# ---------------------------------------------------------------------------
+# Frozen layers
+# ---------------------------------------------------------------------------
+
+# TODO: maybe replace nn.Linear with FrozenLinear for consistent implementations?
 class FrozenLinear(nn.Linear):
+    """nn.Linear with frozen weight and bias."""
+
     def __init__(self, *args, **kwargs):
         nn.Linear.__init__(self, *args, **kwargs)
         self.weight.requires_grad = False
@@ -48,10 +52,8 @@ class FrozenLinear(nn.Linear):
     def _from_linear(module: nn.Linear, **kwargs):
         if isinstance(module, nn.Linear):
             out_size, in_size = module.weight.shape
-            device = module.weight.device
-            dtype = module.weight.dtype
             lora_module = FrozenLinear(
-                in_size, 
+                in_size,
                 out_size,
                 **kwargs
             )
@@ -64,7 +66,10 @@ class FrozenLinear(nn.Linear):
                 f"of torch.nn.Linear class, but {str(type(module))} is given."
             )
 
+
 class FrozenConv2d(nn.Conv2d):
+    """nn.Conv2d with frozen weight and bias."""
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.weight.requires_grad = False
@@ -75,8 +80,6 @@ class FrozenConv2d(nn.Conv2d):
     def _from_conv2d(module: nn.Conv2d, **kwargs):
         if isinstance(module, nn.Conv2d):
             out_channels, in_channels, kh, kw = module.weight.shape
-            device = module.weight.device
-            dtype = module.weight.dtype
 
             frozen_module = FrozenConv2d(
                 in_channels,
@@ -102,7 +105,14 @@ class FrozenConv2d(nn.Conv2d):
                 f"but got {type(module)}."
             )
 
+
+# ---------------------------------------------------------------------------
+# LoRA layers
+# ---------------------------------------------------------------------------
+
 class LoRAConv2d(nn.Conv2d, LoRALayer):
+    """nn.Conv2d with a trainable low-rank update on top of frozen weights."""
+
     def __init__(
         self,
         in_features: int,
@@ -115,7 +125,7 @@ class LoRAConv2d(nn.Conv2d, LoRALayer):
         groups=1,
         bias=True,
         padding_mode='zeros',
-        lora_alpha: int = 1, 
+        lora_alpha: int = 1,
         lora_dropout: float = 0.,
         merge_weights: bool = True,
         device=None,
@@ -143,10 +153,10 @@ class LoRAConv2d(nn.Conv2d, LoRALayer):
         out_channels, in_channels, kH, kW = self.weight.size()
 
         LoRALayer.__init__(self, rank=rank, lora_alpha=lora_alpha, lora_dropout=lora_dropout, merge_weights=merge_weights)
-        # Actual trainable parameters
 
+        # Actual trainable parameters
         flattened_in = in_channels * kH * kW
-        
+
         self.lora_A = nn.Parameter(
             torch.zeros(rank, flattened_in, **factory_kwargs),
             requires_grad=True,
@@ -155,13 +165,12 @@ class LoRAConv2d(nn.Conv2d, LoRALayer):
             torch.zeros(out_channels, rank, **factory_kwargs),
             requires_grad=True,
         )
-        
-        # Reset
-        # only for testing, remove in prod version
+
+        # Parameter-count difference vs. the full weight (shown in repr)
         self.size_diff = torch.numel(self.lora_A) + torch.numel(self.lora_B) - torch.numel(self.weight)
         self.reset_parameters()
         self.merged = False
-    
+
     def _lora_weight(self):
         """
         Returns LoRA weight update reshaped to Conv2d weight shape.
@@ -186,7 +195,7 @@ class LoRAConv2d(nn.Conv2d, LoRALayer):
             if self.merge_weights and not self.merged:
                 self.weight.data += self._lora_weight()
                 self.merged = True
-    
+
     @torch.jit.export
     def merge(self, merge: bool = True):
         with torch.no_grad():
@@ -195,7 +204,7 @@ class LoRAConv2d(nn.Conv2d, LoRALayer):
                 self.merged = True
             if not merge and self.merged:
                 self.weight.sub_(self._lora_weight())
-                self.merged = False     
+                self.merged = False
 
     def forward(self, x: torch.Tensor):
         if not self.merged:
@@ -211,14 +220,14 @@ class LoRAConv2d(nn.Conv2d, LoRALayer):
             )
         else:
             return F.conv2d(
-            x,
-            self.weight,
-            self.bias,
-            self.stride,
-            self.padding,
-            self.dilation,
-            self.groups,
-        )
+                x,
+                self.weight,
+                self.bias,
+                self.stride,
+                self.padding,
+                self.dilation,
+                self.groups,
+            )
 
     def extra_repr(self) -> str:
         return (
@@ -229,7 +238,7 @@ class LoRAConv2d(nn.Conv2d, LoRALayer):
             f"rank={self.rank}, "
             f"size_diff={self.size_diff}"
         )
-    
+
     def state_dict(self, *args, keep_weights=False, keep_bias=False, **kwargs):
         dest = super().state_dict(*args, **kwargs)
         if not keep_weights or not keep_bias:
@@ -239,7 +248,7 @@ class LoRAConv2d(nn.Conv2d, LoRALayer):
                 elif not keep_bias and "bias" in k:
                     del dest[k]
         return dest
-    
+
     @staticmethod
     def _from_conv2d(
         module: nn.Conv2d,
@@ -294,13 +303,15 @@ class LoRAConv2d(nn.Conv2d, LoRALayer):
 
 
 class LoRALinear(nn.Linear, LoRALayer):
+    """nn.Linear with a trainable low-rank update on top of frozen weights."""
+
     def __init__(
-        self, 
-        in_features: int, 
-        out_features: int, 
+        self,
+        in_features: int,
+        out_features: int,
         rank: int,
         bias: bool = True,
-        lora_alpha: int = 1, 
+        lora_alpha: int = 1,
         lora_dropout: float = 0.,
         merge_weights: bool = True,
         device=None,
@@ -315,6 +326,7 @@ class LoRALinear(nn.Linear, LoRALayer):
             self.bias.requires_grad = False
 
         LoRALayer.__init__(self, rank=rank, lora_alpha=lora_alpha, lora_dropout=lora_dropout, merge_weights=merge_weights)
+
         # Actual trainable parameters
         self.lora_A = nn.Parameter(
             torch.zeros(rank, in_features, **factory_kwargs),
@@ -324,13 +336,12 @@ class LoRALinear(nn.Linear, LoRALayer):
             torch.zeros(out_features, rank, **factory_kwargs),
             requires_grad=True,
         )
-        
-        # Reset
-        # only for testing, remove in prod version
+
+        # Parameter-count difference vs. the full weight (shown in repr)
         self.size_diff = torch.numel(self.lora_A) + torch.numel(self.lora_B) - torch.numel(self.weight)
         self.reset_parameters()
         self.merged = False
-    
+
     def reset_parameters(self):
         super().reset_parameters()
         if hasattr(self, "lora_A"):
@@ -351,7 +362,7 @@ class LoRALinear(nn.Linear, LoRALayer):
 
     def _lora_weight(self):
         return self.lora_B @ self.lora_A * self.scaling
-    
+
     @torch.jit.export
     def merge(self, merge: bool = True):
         with torch.no_grad():
@@ -360,14 +371,14 @@ class LoRALinear(nn.Linear, LoRALayer):
                 self.merged = True
             if not merge and self.merged:
                 self.weight.sub_(self._lora_weight())
-                self.merged = False     
+                self.merged = False
 
     def forward(self, x: torch.Tensor):
         result = F.linear(x, self.weight, bias=self.bias)
         if self.merged:
             return result
         lora_x = self.lora_dropout_func(x)
-        lora_h = F.linear(lora_x, self.lora_A) * self.scaling          
+        lora_h = F.linear(lora_x, self.lora_A) * self.scaling
         result += F.linear(lora_h, self.lora_B)
         return result
 
@@ -376,7 +387,7 @@ class LoRALinear(nn.Linear, LoRALayer):
         Return the extra representation of the module.
         """
         return f"in_features={self.in_features}, out_features={self.out_features}, bias={self.bias is not None}, rank={self.rank}, size_diff={self.size_diff}"
-    
+
     def state_dict(self, *args, keep_weights=False, keep_bias=False, **kwargs):
         dest = super().state_dict(*args, **kwargs)
         if not keep_weights or not keep_bias:
@@ -391,10 +402,10 @@ class LoRALinear(nn.Linear, LoRALayer):
     def _from_linear(
         module: nn.Linear,
         rank: int,
-        lora_alpha: int = 1, 
+        lora_alpha: int = 1,
         lora_dropout: float = 0.,
         merge_weights: bool = True,
-        share_mem: bool=False,
+        share_mem: bool = False,
         device=None,
         dtype=None,
     ):
@@ -405,9 +416,9 @@ class LoRALinear(nn.Linear, LoRALayer):
             device = module.weight.device
             dtype = module.weight.dtype
             lora_module = LoRALinear(
-                in_size, 
-                out_size, 
-                rank=rank, 
+                in_size,
+                out_size,
+                rank=rank,
                 lora_alpha=lora_alpha,
                 lora_dropout=lora_dropout,
                 merge_weights=merge_weights,
@@ -427,46 +438,14 @@ class LoRALinear(nn.Linear, LoRALayer):
                 f"of torch.nn.Linear class, but {str(type(module))} is given."
             )
 
-#class LoRASequential(nn.Sequential):
-#    @classmethod
-#    def _from_sequential(cls, model: nn.Sequential, ranks=None, targets=None, share_mem=False):
-#        if not isinstance(model, nn.Sequential):
-#            raise ValueError(
-#                "from_sequential method supports only objects "
-#                f"of torch.nn.Linear class, but {str(type(module))} is given."
-#            )
-#        modules = []
-#        check = targets is None
-#        if ranks is None:
-#            ranks = iter([])
-#        elif isinstance(ranks, int):
-#            ranks = repeat(ranks)
-#        else:
-#            ranks = iter(ranks)
-#
-#        for i, layer in enumerate(model):
-#            if (check or i in targets) and isinstance(layer, nn.Linear):
-#                rank = next(ranks, 1)
-#                modules.append(LoRALinear._from_linear(layer, rank, share_mem=share_mem))
-#            elif (check or i in targets) and isinstance(layer, nn.Conv2d):
-#                rank = next(ranks, 1)
-#                modules.append(LoRAConv2d._from_conv2d(layer, rank, share_mem=share_mem))
-#            elif isinstance(layer, nn.Linear):
-#                modules.append(FrozenLinear._from_linear(layer))
-#            elif isinstance(layer, nn.Conv2d):
-#                modules.append(FrozenConv2d._from_conv2d(layer))
-#            else:
-#                modules.append(layer)
-#        return cls(*modules)
-#    
-#    @torch.jit.export
-#    def merge(self, merge: bool = True):
-#        for m in self.children():
-#            if isinstance(m, LoRALayer):
-#                m.merge(merge)
-#        return self
+
+# ---------------------------------------------------------------------------
+# Swapping between several LoRAs
+# ---------------------------------------------------------------------------
 
 class MultiLora(nn.Module):
+    """Wraps a Linear/Conv2d and swaps between several LoRA updates in place."""
+
     def __init__(self, base_module):
         super().__init__()
         assert isinstance(base_module, (nn.Linear, nn.Conv2d)), \
@@ -510,93 +489,14 @@ class MultiLora(nn.Module):
 
     def forward(self, input_tensor):
         return self.base_module.forward(input_tensor)
-    
-
-#class MultiLora:
-#    """Mixin providing multi-LoRA swap capability. Combine with nn.Linear or
-#    nn.Conv2d (see MultiLoraLinear / MultiLoraConv2d) — not instantiated directly."""
-#
-#    loras: List[tuple[torch.Tensor, torch.Tensor, float]]
-#    current_index: int
-#
-#    def _lora_init(self):
-#        self.loras = []
-#        self.current_index = -1
-#
-#    @torch.jit.unused
-#    def _apply(self, fn):
-#        super()._apply(fn)
-#        self.loras = [
-#            (fn(lora_A), fn(lora_B), scaling)
-#            for (lora_A, lora_B, scaling) in self.loras
-#        ]
-#        return self
-#
-#    @torch.jit.unused
-#    def append(self, lora: "LoRALayer"):
-#        torch.allclose(lora.weight, self.weight)
-#        self.loras.append((lora.lora_A, lora.lora_B, lora.scaling))
-#
-#    def _lora_weight(self, triple: tuple[torch.Tensor, torch.Tensor, float]) -> torch.Tensor:
-#        lora_A, lora_B, scaling = triple
-#        return (lora_B @ lora_A).view_as(self.weight) * scaling
-#
-#    @torch.jit.export
-#    def swap(self, index: int):
-#        if index == self.current_index:
-#            return
-#        with torch.no_grad():
-#            weight: Optional[torch.Tensor] = None
-#            for i, lora in enumerate(self.loras):
-#                if i == self.current_index:
-#                    self.weight -= self._lora_weight(lora)
-#                if i == index:
-#                    weight = self._lora_weight(lora)
-#            if weight is not None:
-#                self.weight += weight
-#        self.current_index = index
-#
-#
-#class MultiLoraLinear(MultiLora, nn.Linear):
-#    def __init__(self, *args, **kwargs):
-#        nn.Linear.__init__(self, *args, **kwargs)
-#        self._lora_init()
-#
-#    @classmethod
-#    def _from_linear(cls, linear: nn.Linear) -> "MultiLoraLinear":
-#        new = cls(linear.in_features, linear.out_features, bias=linear.bias is not None)
-#        new.load_state_dict(linear.state_dict())
-#        return new
-#
-#
-#class MultiLoraConv2d(MultiLora, nn.Conv2d):
-#    def __init__(self, *args, **kwargs):
-#        nn.Conv2d.__init__(self, *args, **kwargs)
-#        self._lora_init()
-#
-#    @classmethod
-#    def _from_conv2d(cls, conv: nn.Conv2d) -> "MultiLoraConv2d":
-#        new = cls(
-#            conv.in_channels, conv.out_channels, conv.kernel_size,
-#            stride=conv.stride, padding=conv.padding, dilation=conv.dilation,
-#            groups=conv.groups, bias=conv.bias is not None,
-#        )
-#        new.load_state_dict(conv.state_dict())
-#        return new
-#
-#
-#def _to_multilora(module: nn.Module) -> nn.Module:
-#    if isinstance(module, nn.Linear):
-#        return MultiLoraLinear._from_linear(module)
-#    if isinstance(module, nn.Conv2d):
-#        return MultiLoraConv2d._from_conv2d(module)
-#    return module
 
 
 class SequentialMultiLora(nn.Sequential):
+    """nn.Sequential whose Linear/Conv2d layers are wrapped in MultiLora."""
+
     def __init__(self, sequence):
         super().__init__(*[MultiLora(module) if isinstance(module, (nn.Linear, nn.Conv2d)) else module for module in sequence])
-        
+
     @torch.jit.unused
     def append(self, lora_sequence):
         multilora_layers = [m for m in self]
@@ -611,11 +511,12 @@ class SequentialMultiLora(nn.Sequential):
             if hasattr(base, "loras"):
                 base.swap(index)
 
-    
 
+# ---------------------------------------------------------------------------
+# Model conversion helpers
+# ---------------------------------------------------------------------------
 
-    
-def _from_sequential(model: nn.Sequential, ranks = None, targets = None):
+def _from_sequential(model: nn.Sequential, ranks=None, targets=None):
     modules = []
     check = targets is None
     if ranks is None:
@@ -644,6 +545,7 @@ def _from_sequential(model: nn.Sequential, ranks = None, targets = None):
     lora_model = nn.Sequential(*modules)
     return lora_model
 
+
 def _merge_seq(model, merge: bool = True):
     if isinstance(model, LoRALinear):
         model.merge(merge)
@@ -654,39 +556,34 @@ def _merge_seq(model, merge: bool = True):
                 layer.merge(merge)
 
 
-
-
-
 class Constructed_LoRAs(nn.Module):
+    """Holds several LoRA models that share the base model's parameters."""
+
     def __init__(self, base_model: nn.Sequential, loras_models: List[nn.Sequential]):
         super().__init__()
 
         base_params = dict(base_model.named_parameters())
         base_buffers = dict(base_model.named_buffers())
         self.loras = nn.ModuleList()
-        
+
         for lora_model in loras_models:
             for name, param in lora_model.named_parameters():
                 if name in base_params:
                     parent_name, param_name = self._get_parent_and_name(lora_model, name)
-                    setattr(parent_name, param_name, base_params[name])            
+                    setattr(parent_name, param_name, base_params[name])
             for name, buf in lora_model.named_buffers():
                 if name in base_buffers:
                     parent_name, buf_name = self._get_parent_and_name(lora_model, name)
                     setattr(parent_name, buf_name, base_buffers[name])
-            
+
             self.loras.append(lora_model)
-        #if all(list(x.parameters())[0].data_ptr() == list(y.parameters())[0].data_ptr() for x in self.loras for y in self.loras for z in range(2)):
-        #    print("✅ Sharing memory!")
-        #else:
-        #    print("❌ Independent memory allocations.")
-        #    assert 1 == 0
+
         self.index: int = 0
         self.current = self.loras[0]
         for layer in self.current:
             if isinstance(layer, LoRALinear):
                 layer.merge()
-    
+
     def _get_parent_and_name(self, model, target_name):
         """Helper to find the parent module of a nested parameter name."""
         names = target_name.split(".")
@@ -694,7 +591,7 @@ class Constructed_LoRAs(nn.Module):
         for i in range(len(names) - 1):
             curr = getattr(curr, names[i])
         return curr, names[-1]
-    
+
     @torch.jit.export
     def swap(self, inp: int):
         for layer in self.current:
@@ -710,53 +607,3 @@ class Constructed_LoRAs(nn.Module):
 
     def forward(self, inp):
         return self.current.forward(inp)
-
-if __name__ == "__main__":
-    base_model = nn.Sequential(
-        nn.Linear(100, 20), nn.ReLU(), nn.Linear(20, 70), nn.ReLU()
-    )
-
-    base_model_2 = nn.Sequential(
-        nn.Linear(100, 20), nn.ReLU(), nn.Linear(20, 70), nn.ReLU()
-    )
-
-    lora_model = _from_sequential(base_model, [10, 3])
-    lora_model_2 = _from_sequential(base_model_2, [10, 3])
-    lora_model_3 = _from_sequential(base_model_2, [10, 3])  
-
-    lora_model_2.load_state_dict(base_model.state_dict(), strict=False)
-    lora_model_2.load_state_dict(lora_model.state_dict(), strict=False)
-
-    d = base_model.state_dict()
-    d.update(lora_model.state_dict())
-
-    lora_model_3.load_state_dict(d)
-
-    lora_model_4 = _from_sequential(base_model_2, [10, 3])
-
-    factory = Constructed_LoRAs(base_model, [lora_model, lora_model_4, lora_model_2])
-
-    print("Saving TorchScript model...")
-    scripted_model = torch.jit.script(factory)
-    torch.jit.save(scripted_model, "lora_factory.pt")
-
-    print("Loading TorchScript model...")
-    loaded_model = torch.jit.load("lora_factory.pt")
-
-    x = torch.randn(1, 100)
-    
-    loaded_model.swap(0)
-    out_a = loaded_model(x)
-    print(out_a)
-
-    loaded_model.swap(1)
-    out_b = loaded_model(x)
-    print(out_b)
-
-    loaded_model.swap(0)
-    out_c = loaded_model(x)
-    print(out_c)
-    
-    # Verification
-    is_same = torch.allclose(out_a, out_c)
-    print(f"Consistency Check (Swap 0 vs Repeat Swap 0): {'PASSED' if is_same else 'FAILED'}")
