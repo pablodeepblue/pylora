@@ -16,6 +16,7 @@
 
 This work is based on [PyTorch Adventures](https://github.com/priyammaz/PyTorch-Adventures) and [LoRA](https://github.com/microsoft/LoRA/tree/main) repos implementation.
 This a clean version of the one used in a [Legged Gym EX fork](https://github.com/pghezzi/Legged_Gym_EX) I used for a paper in initial testing.
+
 ---
 
 ## What is LoRA?
