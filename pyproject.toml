@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pylora"
+version = "0.1.0"
+description = "A simple implementation of LoRA in PyTorch"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["torch"]
+license = "GPL-2.0-only"
+license-files = ["LICENSE"]
+
+[tool.setuptools]
+py-modules = ["pylora"]
