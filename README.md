@@ -16,7 +16,7 @@
 ## Repository status
 
 <!-- CI-STATUS:START -->
-**Automated functional checks:** ⏳ Pending the first GitHub Actions run.
+**Automated functional checks:** ✅ Working — all functional tests passed.
 <!-- CI-STATUS:END -->
 
 ## Acknowledgement
