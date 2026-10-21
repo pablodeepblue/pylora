@@ -17,3 +17,18 @@ test = ["pytest>=7"]
 
 [tool.setuptools]
 py-modules = ["pylora"]
+
+[tool.pylint.main]
+py-version = "3.9"
+
+[tool.pylint.messages_control]
+disable = [
+    "arguments-differ",
+    "arguments-renamed",
+    "consider-using-from-import",
+    "invalid-name",
+    "protected-access",
+    "too-many-arguments",
+    "too-many-locals",
+    "too-many-positional-arguments",
+]

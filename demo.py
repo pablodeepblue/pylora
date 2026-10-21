@@ -7,6 +7,7 @@ from pylora import Constructed_LoRAs, _from_sequential
 
 
 def main():
+    """Create, serialize, reload, and swap a set of LoRA adapters."""
     base_model = nn.Sequential(
         nn.Linear(100, 20), nn.ReLU(), nn.Linear(20, 70), nn.ReLU()
     )

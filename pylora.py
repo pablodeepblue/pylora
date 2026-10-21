@@ -28,18 +28,19 @@ class LoRALayer:
 
     @abstractmethod
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        ...
+        """Apply the layer to an input tensor."""
+        raise NotImplementedError
 
     @abstractmethod
     def merge(self, merge: bool = True):
-        ...
+        """Merge or unmerge the low-rank update with the base weights."""
+        raise NotImplementedError
 
 
 # ---------------------------------------------------------------------------
 # Frozen layers
 # ---------------------------------------------------------------------------
 
-# TODO: maybe replace nn.Linear with FrozenLinear for consistent implementations?
 class FrozenLinear(nn.Linear):
     """nn.Linear with frozen weight and bias."""
 
@@ -63,11 +64,10 @@ class FrozenLinear(nn.Linear):
             if module.bias is not None:
                 lora_module.bias.data = module.bias.data
             return lora_module
-        else:
-            raise ValueError(
-                "_from_linear classmethod supports only objects "
-                f"of torch.nn.Linear class, but {str(type(module))} is given."
-            )
+        raise ValueError(
+            "_from_linear classmethod supports only objects "
+            f"of torch.nn.Linear class, but {str(type(module))} is given."
+        )
 
 
 class FrozenConv2d(nn.Conv2d):
@@ -102,11 +102,10 @@ class FrozenConv2d(nn.Conv2d):
                 frozen_module.bias.data = module.bias.data.clone()
 
             return frozen_module
-        else:
-            raise ValueError(
-                "_from_conv2d supports only torch.nn.Conv2d, "
-                f"but got {type(module)}."
-            )
+        raise ValueError(
+            "_from_conv2d supports only torch.nn.Conv2d, "
+            f"but got {type(module)}."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +154,13 @@ class LoRAConv2d(nn.Conv2d, LoRALayer):
             self.bias.requires_grad = False
         out_channels, in_channels, kH, kW = self.weight.size()
 
-        LoRALayer.__init__(self, rank=rank, lora_alpha=lora_alpha, lora_dropout=lora_dropout, merge_weights=merge_weights)
+        LoRALayer.__init__(
+            self,
+            rank=rank,
+            lora_alpha=lora_alpha,
+            lora_dropout=lora_dropout,
+            merge_weights=merge_weights,
+        )
 
         # Actual trainable parameters
         flattened_in = in_channels * kH * kW
@@ -170,7 +175,9 @@ class LoRAConv2d(nn.Conv2d, LoRALayer):
         )
 
         # Parameter-count difference vs. the full weight (shown in repr)
-        self.size_diff = torch.numel(self.lora_A) + torch.numel(self.lora_B) - torch.numel(self.weight)
+        self.size_diff = (
+            torch.numel(self.lora_A) + torch.numel(self.lora_B) - torch.numel(self.weight)
+        )
         self.reset_parameters()
         self.merged = False
 
@@ -221,16 +228,15 @@ class LoRAConv2d(nn.Conv2d, LoRALayer):
                 self.dilation,
                 self.groups,
             )
-        else:
-            return F.conv2d(
-                x,
-                self.weight,
-                self.bias,
-                self.stride,
-                self.padding,
-                self.dilation,
-                self.groups,
-            )
+        return F.conv2d(
+            x,
+            self.weight,
+            self.bias,
+            self.stride,
+            self.padding,
+            self.dilation,
+            self.groups,
+        )
 
     def extra_repr(self) -> str:
         return (
@@ -322,13 +328,25 @@ class LoRALinear(nn.Linear, LoRALayer):
     ):
         assert rank > 0, "LoRA rank must be greater than 0"
         factory_kwargs = {"device": device, "dtype": dtype}
-        nn.Linear.__init__(self, in_features=in_features, out_features=out_features, bias=bias, **factory_kwargs)
+        nn.Linear.__init__(
+            self,
+            in_features=in_features,
+            out_features=out_features,
+            bias=bias,
+            **factory_kwargs,
+        )
         # Freezing the pre-trained weight matrix and bias (following peft example)
         self.weight.requires_grad = False
         if self.bias is not None:
             self.bias.requires_grad = False
 
-        LoRALayer.__init__(self, rank=rank, lora_alpha=lora_alpha, lora_dropout=lora_dropout, merge_weights=merge_weights)
+        LoRALayer.__init__(
+            self,
+            rank=rank,
+            lora_alpha=lora_alpha,
+            lora_dropout=lora_dropout,
+            merge_weights=merge_weights,
+        )
 
         # Actual trainable parameters
         self.lora_A = nn.Parameter(
@@ -341,7 +359,9 @@ class LoRALinear(nn.Linear, LoRALayer):
         )
 
         # Parameter-count difference vs. the full weight (shown in repr)
-        self.size_diff = torch.numel(self.lora_A) + torch.numel(self.lora_B) - torch.numel(self.weight)
+        self.size_diff = (
+            torch.numel(self.lora_A) + torch.numel(self.lora_B) - torch.numel(self.weight)
+        )
         self.reset_parameters()
         self.merged = False
 
@@ -389,7 +409,10 @@ class LoRALinear(nn.Linear, LoRALayer):
         """
         Return the extra representation of the module.
         """
-        return f"in_features={self.in_features}, out_features={self.out_features}, bias={self.bias is not None}, rank={self.rank}, size_diff={self.size_diff}"
+        return (
+            f"in_features={self.in_features}, out_features={self.out_features}, "
+            f"bias={self.bias is not None}, rank={self.rank}, size_diff={self.size_diff}"
+        )
 
     def state_dict(self, *args, keep_weights=False, keep_bias=False, **kwargs):
         dest = super().state_dict(*args, **kwargs)
@@ -412,36 +435,35 @@ class LoRALinear(nn.Linear, LoRALayer):
         device=None,
         dtype=None,
     ):
-        if isinstance(module, nn.Linear):
-            if rank == 0:
-                return FrozenLinear._from_linear(module)
-            out_size, in_size = module.weight.shape
-            device = module.weight.device
-            dtype = module.weight.dtype
-            lora_module = LoRALinear(
-                in_size,
-                out_size,
-                rank=rank,
-                bias=module.bias is not None,
-                lora_alpha=lora_alpha,
-                lora_dropout=lora_dropout,
-                merge_weights=merge_weights,
-                device=device,
-                dtype=dtype,
-            )
-            if share_mem:
-                lora_module.weight = module.weight
-                lora_module.bias = module.bias
-            else:
-                lora_module.weight.data = module.weight.data
-                if module.bias is not None:
-                    lora_module.bias.data = module.bias.data
-            return lora_module
-        else:
+        if not isinstance(module, nn.Linear):
             raise ValueError(
                 "_from_linear method supports only objects "
                 f"of torch.nn.Linear class, but {str(type(module))} is given."
             )
+        if rank == 0:
+            return FrozenLinear._from_linear(module)
+        out_size, in_size = module.weight.shape
+        device = module.weight.device
+        dtype = module.weight.dtype
+        lora_module = LoRALinear(
+            in_size,
+            out_size,
+            rank=rank,
+            bias=module.bias is not None,
+            lora_alpha=lora_alpha,
+            lora_dropout=lora_dropout,
+            merge_weights=merge_weights,
+            device=device,
+            dtype=dtype,
+        )
+        if share_mem:
+            lora_module.weight = module.weight
+            lora_module.bias = module.bias
+        else:
+            lora_module.weight.data = module.weight.data
+            if module.bias is not None:
+                lora_module.bias.data = module.bias.data
+        return lora_module
 
 
 # ---------------------------------------------------------------------------
@@ -470,6 +492,7 @@ class MultiLora(nn.Module):
 
     @torch.jit.unused
     def append(self, lora: "LoRALayer"):
+        """Register an adapter whose update can be selected with :meth:`swap`."""
         self.loras.append((lora.lora_A, lora.lora_B, lora.scaling))
 
     def _lora_weight(self, triple: Tuple[torch.Tensor, torch.Tensor, float]):
@@ -478,6 +501,7 @@ class MultiLora(nn.Module):
 
     @torch.jit.export
     def swap(self, index: int):
+        """Activate an adapter by index, or ``-1`` to restore base weights."""
         assert -1 <= index < len(self.loras), f"index {index} out of range"
         if index == self.current_index:
             return
@@ -493,6 +517,7 @@ class MultiLora(nn.Module):
         self.current_index = index
 
     def forward(self, input_tensor):
+        """Run the wrapped base layer with the active adapter."""
         return self.base_module.forward(input_tensor)
 
 
@@ -500,11 +525,16 @@ class SequentialMultiLora(nn.Sequential):
     """nn.Sequential whose Linear/Conv2d layers are wrapped in MultiLora."""
 
     def __init__(self, sequence):
-        super().__init__(*[MultiLora(module) if isinstance(module, (nn.Linear, nn.Conv2d)) else module for module in sequence])
+        modules = [
+            MultiLora(module) if isinstance(module, (nn.Linear, nn.Conv2d)) else module
+            for module in sequence
+        ]
+        super().__init__(*modules)
 
     @torch.jit.unused
     def append(self, lora_sequence):
-        multilora_layers = [m for m in self]
+        """Register one adapter sequence for every eligible base layer."""
+        multilora_layers = list(self)
         lora_list = list(lora_sequence)
         for base, lora in zip(multilora_layers, lora_list):
             if isinstance(base, MultiLora):
@@ -512,6 +542,7 @@ class SequentialMultiLora(nn.Sequential):
 
     @torch.jit.export
     def swap(self, index: int):
+        """Activate the same adapter index for every wrapped layer."""
         for base in self:
             if hasattr(base, "loras"):
                 base.swap(index)
@@ -572,11 +603,11 @@ class Constructed_LoRAs(nn.Module):
         self.loras = nn.ModuleList()
 
         for lora_model in loras_models:
-            for name, param in lora_model.named_parameters():
+            for name, _param in lora_model.named_parameters():
                 if name in base_params:
                     parent_name, param_name = self._get_parent_and_name(lora_model, name)
                     setattr(parent_name, param_name, base_params[name])
-            for name, buf in lora_model.named_buffers():
+            for name, _buf in lora_model.named_buffers():
                 if name in base_buffers:
                     parent_name, buf_name = self._get_parent_and_name(lora_model, name)
                     setattr(parent_name, buf_name, base_buffers[name])
@@ -598,6 +629,7 @@ class Constructed_LoRAs(nn.Module):
 
     @torch.jit.export
     def swap(self, inp: int):
+        """Switch the active LoRA model."""
         assert 0 <= inp < len(self.loras), f"index {inp} out of range"
         for i, model in enumerate(self.loras):
             if i == self.index:
@@ -612,6 +644,7 @@ class Constructed_LoRAs(nn.Module):
                         layer.merge(True)
 
     def forward(self, inp):
+        """Apply the currently selected LoRA model."""
         for i, model in enumerate(self.loras):
             if i == self.index:
                 return model.forward(inp)
