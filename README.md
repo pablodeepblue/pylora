@@ -6,15 +6,15 @@
 </p>
 
 <p align="center">
-  <img alt="language: Python" src="https://img.shields.io/badge/language-Python-blue">
-  <img alt="built with: PyTorch" src="https://img.shields.io/badge/built%20with-PyTorch-ee4c2c">
-  <img alt="license: GPL-2.0" src="https://img.shields.io/badge/license-GPL--2.0-green">
   <a href="https://github.com/pablodeepblue/pylora/actions/workflows/test-suite.yml">
     <img alt="Functional tests" src="https://github.com/pablodeepblue/pylora/actions/workflows/test-suite.yml/badge.svg">
   </a>
   <a href="https://github.com/pablodeepblue/pylora/actions/workflows/pylint.yml">
     <img alt="Pylint" src="https://github.com/pablodeepblue/pylora/actions/workflows/pylint.yml/badge.svg">
   </a>
+  <img alt="language: Python" src="https://img.shields.io/badge/language-Python-blue">
+  <img alt="built with: PyTorch" src="https://img.shields.io/badge/built%20with-PyTorch-ee4c2c">
+  <img alt="license: GPL-2.0" src="https://img.shields.io/badge/license-GPL--2.0-green">
 </p>
 
 ---
