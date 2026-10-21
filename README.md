@@ -19,12 +19,6 @@
 
 ---
 
-## Repository status
-
-<!-- CI-STATUS:START -->
-**Automated functional checks:** ✅ Working — all functional tests passed.
-<!-- CI-STATUS:END -->
-
 ## Acknowledgement
 
 This work is based on [PyTorch Adventures](https://github.com/priyammaz/PyTorch-Adventures) and [LoRA](https://github.com/microsoft/LoRA/tree/main) repos implementation.
