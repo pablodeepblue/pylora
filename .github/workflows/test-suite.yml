@@ -1,0 +1,80 @@
+name: Test suite
+
+on:
+  push:
+    paths-ignore:
+      - README.md
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install package and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu torch
+          python -m pip install --no-deps .
+      - name: Run functional test suite
+        run: python -m pytest -v
+
+  update-readme-status:
+    name: Update README status
+    needs: test
+    if: ${{ always() && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update the repository status block
+        env:
+          TEST_RESULT: ${{ needs.test.result }}
+        run: |
+          if [ "$TEST_RESULT" = "success" ]; then
+            status="✅ Working — all functional tests passed"
+          else
+            status="❌ Broken — one or more functional tests failed"
+          fi
+
+          python - "$status" <<'PY'
+          from pathlib import Path
+          import sys
+
+          readme = Path("README.md")
+          content = readme.read_text()
+          start = "<!-- CI-STATUS:START -->"
+          end = "<!-- CI-STATUS:END -->"
+          replacement = f"{start}\n**Automated functional checks:** {sys.argv[1]}.\n{end}"
+          before, marker, remainder = content.partition(start)
+          if not marker:
+              raise SystemExit("README status markers are missing")
+          _, marker, after = remainder.partition(end)
+          if not marker:
+              raise SystemExit("README status markers are missing")
+          readme.write_text(before + replacement + after)
+          PY
+      - name: Commit status when it changed
+        run: |
+          if git diff --quiet -- README.md; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git commit -m "docs: update repository status"
+          git push

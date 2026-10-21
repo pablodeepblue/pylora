@@ -46,7 +46,8 @@ class FrozenLinear(nn.Linear):
     def __init__(self, *args, **kwargs):
         nn.Linear.__init__(self, *args, **kwargs)
         self.weight.requires_grad = False
-        self.bias.requires_grad = False
+        if self.bias is not None:
+            self.bias.requires_grad = False
 
     @staticmethod
     def _from_linear(module: nn.Linear, **kwargs):
@@ -55,10 +56,12 @@ class FrozenLinear(nn.Linear):
             lora_module = FrozenLinear(
                 in_size,
                 out_size,
+                bias=module.bias is not None,
                 **kwargs
             )
             lora_module.weight.data = module.weight.data
-            lora_module.bias.data = module.bias.data
+            if module.bias is not None:
+                lora_module.bias.data = module.bias.data
             return lora_module
         else:
             raise ValueError(
@@ -419,6 +422,7 @@ class LoRALinear(nn.Linear, LoRALayer):
                 in_size,
                 out_size,
                 rank=rank,
+                bias=module.bias is not None,
                 lora_alpha=lora_alpha,
                 lora_dropout=lora_dropout,
                 merge_weights=merge_weights,
@@ -430,7 +434,8 @@ class LoRALinear(nn.Linear, LoRALayer):
                 lora_module.bias = module.bias
             else:
                 lora_module.weight.data = module.weight.data
-                lora_module.bias.data = module.bias.data
+                if module.bias is not None:
+                    lora_module.bias.data = module.bias.data
             return lora_module
         else:
             raise ValueError(
@@ -579,8 +584,7 @@ class Constructed_LoRAs(nn.Module):
             self.loras.append(lora_model)
 
         self.index: int = 0
-        self.current = self.loras[0]
-        for layer in self.current:
+        for layer in self.loras[0]:
             if isinstance(layer, LoRALinear):
                 layer.merge()
 
@@ -594,16 +598,21 @@ class Constructed_LoRAs(nn.Module):
 
     @torch.jit.export
     def swap(self, inp: int):
-        for layer in self.current:
-            if isinstance(layer, LoRALinear):
-                layer.merge(False)
+        assert 0 <= inp < len(self.loras), f"index {inp} out of range"
+        for i, model in enumerate(self.loras):
+            if i == self.index:
+                for layer in model:
+                    if isinstance(layer, LoRALinear):
+                        layer.merge(False)
         self.index = inp
         for i, model in enumerate(self.loras):
             if i == self.index:
-                self.current = model
-        for layer in self.current:
-            if isinstance(layer, LoRALinear):
-                layer.merge(True)
+                for layer in model:
+                    if isinstance(layer, LoRALinear):
+                        layer.merge(True)
 
     def forward(self, inp):
-        return self.current.forward(inp)
+        for i, model in enumerate(self.loras):
+            if i == self.index:
+                return model.forward(inp)
+        raise RuntimeError("active LoRA index is out of range")

@@ -12,6 +12,13 @@
 </p>
 
 ---
+
+## Repository status
+
+<!-- CI-STATUS:START -->
+**Automated functional checks:** ⏳ Pending the first GitHub Actions run.
+<!-- CI-STATUS:END -->
+
 ## Acknowledgement
 
 This work is based on [PyTorch Adventures](https://github.com/priyammaz/PyTorch-Adventures) and [LoRA](https://github.com/microsoft/LoRA/tree/main) repos implementation.
@@ -198,11 +205,10 @@ Common layer arguments:
 ## Notes and current limitations
 
 - The conversion helpers (`_from_linear`, `_from_conv2d`, `_from_sequential`) are underscore-prefixed for now, but they are the intended way to convert existing models.
-- Converting an `nn.Linear` assumes it has a bias term.
 - `lora_dropout` is applied by `LoRALinear`. `LoRAConv2d` accepts the argument but does not use it yet.
 - `Constructed_LoRAs.swap` merges and unmerges `LoRALinear` layers only.
 - `MultiLora` and `SequentialMultiLora` support `nn.Linear` and `nn.Conv2d` only.
-- There is no automated test suite yet.
+- Functional behavior is checked by GitHub Actions across supported Python versions. The status block above is updated after each default-branch run.
 
 ## Contributing
 

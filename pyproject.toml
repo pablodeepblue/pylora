@@ -12,5 +12,8 @@ dependencies = ["torch"]
 license = "GPL-2.0-only"
 license-files = ["LICENSE"]
 
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
 [tool.setuptools]
 py-modules = ["pylora"]
