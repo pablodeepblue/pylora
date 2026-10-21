@@ -23,4 +23,4 @@ jobs:
           python -m pip install pylint
           python -m pip install --index-url https://download.pytorch.org/whl/cpu torch
       - name: Analyse package source
-        run: python -m pylint pylora.py demo.py
+        run: python -m pylint pylora.py examples/demo.py
